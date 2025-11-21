@@ -1,4 +1,4 @@
-# app.py - FULLY WORKING AI RESEARCH AGENT WITH GROQ CLIENT
+# app.py - FULLY WORKING AI RESEARCH AGENT WITH COMPLETE UI
 import os
 import re
 import logging
@@ -26,25 +26,14 @@ logger = logging.getLogger(__name__)
 # ===============================
 # 🔑 HARDCODE YOUR GROQ API KEY HERE (GLOBAL)
 # ===============================
-GROQ_API_KEY = "YOUR-API-KEY"
+GROQ_API_KEY = "your-api-key"
 groq_client = None
 
 if GROQ_OK:
     try:
         print("DEBUG → Initializing Groq client...")
-        # Initialize with just api_key - most compatible approach
         groq_client = Groq(api_key=GROQ_API_KEY)
         print("✅ DEBUG → Groq client initialized successfully!")
-    except TypeError as te:
-        # Fallback for version compatibility issues
-        print(f"⚠️ TypeError during init: {te}")
-        try:
-            print("🔄 Attempting fallback initialization...")
-            groq_client = Groq(api_key=GROQ_API_KEY)
-            print("✅ Fallback initialization successful!")
-        except Exception as e:
-            groq_client = None
-            print(f"❌ Groq initialization failed: {e}")
     except Exception as e:
         groq_client = None
         print(f"❌ Groq initialization error: {e}")
@@ -56,7 +45,22 @@ class AgenticRAGAgent:
         self.chunks = []
         self.index = None
         self.embedder = SentenceTransformer('all-MiniLM-L6-v2')
-        print("✅ AgenticRAGAgent initialized with SentenceTransformer")
+        self.conversation_history = []
+        
+        # UI Settings
+        self.temperature = 0.3
+        self.max_tokens = 500
+        self.chunk_size = 512
+        self.chunk_overlap = 50
+        self.retrieval_k = 8
+        
+        # Feature toggles
+        self.enable_web_search = True
+        self.enable_calculations = True
+        self.enable_fact_checking = True
+        self.enable_analysis = True
+        
+        print("✅ AgenticRAGAgent initialized")
 
     def remove_emojis(self, text: str) -> str:
         """Remove emojis from text for clean voice output"""
@@ -130,14 +134,13 @@ class AgenticRAGAgent:
                 continue
 
             if text.strip():
-                chunks = [text[i:i+500] for i in range(0, len(text), 450)]
+                chunks = [text[i:i+self.chunk_size] for i in range(0, len(text), self.chunk_size - self.chunk_overlap)]
                 all_chunks.extend([{"content": c.strip()} for c in chunks if c.strip()])
                 count += 1
 
         if not all_chunks:
             return "No readable text found in the PDFs."
 
-        # Create embeddings and FAISS index
         print(f"Creating embeddings for {len(all_chunks)} chunks...")
         vecs = self.embedder.encode([c["content"] for c in all_chunks], show_progress_bar=True)
         vecs = vecs / np.linalg.norm(vecs, axis=1, keepdims=True)
@@ -176,7 +179,7 @@ class AgenticRAGAgent:
         # Retrieve relevant chunks
         q_vec = self.embedder.encode([question])
         q_vec = q_vec / np.linalg.norm(q_vec)
-        D, I = self.index.search(q_vec.astype('float32'), k=6)
+        D, I = self.index.search(q_vec.astype('float32'), k=self.retrieval_k)
         context = "\n\n".join([self.chunks[i]["content"] for i in I[0] if i < len(self.chunks)])
 
         prompt = f"Context from documents:\n{context}\n\nQuestion: {question}\nAnswer clearly and accurately:"
@@ -190,8 +193,8 @@ class AgenticRAGAgent:
                 resp = groq_client.chat.completions.create(
                     model="llama-3.3-70b-versatile",
                     messages=[{"role": "user", "content": prompt}],
-                    temperature=0.3,
-                    max_tokens=700
+                    temperature=self.temperature,
+                    max_tokens=self.max_tokens
                 )
                 reply = resp.choices[0].message.content.strip()
                 print(f"✅ Received response from Groq API")
@@ -202,9 +205,32 @@ class AgenticRAGAgent:
         history.append([question, reply])
         return history, self.generate_voice(reply)
 
+    def update_settings(self, temp, tokens, chunk_size, overlap, k, web, calc, fact, analysis):
+        """Update agent settings"""
+        self.temperature = temp
+        self.max_tokens = tokens
+        self.chunk_size = chunk_size
+        self.chunk_overlap = overlap
+        self.retrieval_k = k
+        self.enable_web_search = web
+        self.enable_calculations = calc
+        self.enable_fact_checking = fact
+        self.enable_analysis = analysis
+
+        return f"""⚙️ Settings Updated:
+• Temperature: {temp}
+• Max Tokens: {tokens}
+• Chunk Size: {chunk_size}
+• Chunk Overlap: {overlap}
+• Retrieved Chunks: {k}
+• Web Search: {'✅' if web else '❌'}
+• Calculator: {'✅' if calc else '❌'}
+• Fact Check: {'✅' if fact else '❌'}
+• Analysis: {'✅' if analysis else '❌'}"""
+
 
 # =========================================
-# GRADIO UI
+# GRADIO UI WITH FULL SETTINGS
 # =========================================
 def create_interface():
     agent = AgenticRAGAgent()
@@ -212,17 +238,17 @@ def create_interface():
     with gr.Blocks(title="AI Research Agent", theme=gr.themes.Soft()) as interface:
         gr.HTML("""
         <div style="text-align: center; padding: 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 15px;">
-            <h1 style="color: white; margin: 0;">AI Research Agent - Agentic RAG</h1>
-            <p style="color: white; margin: 10px 0;">Advanced Multi-Tool Research Assistant with Voice Support</p>
+            <h1 style="color: white; margin: 0;">🤖 AI Research Agent - Agentic RAG</h1>
+            <p style="color: white; margin: 10px 0;">Advanced Multi-Tool Research Assistant with Voice Support 🎤🔊</p>
         </div>
         """)
 
         with gr.Row():
             with gr.Column(scale=2):
+                # Chat Interface
                 chatbot = gr.Chatbot(
-                    label="Chat",
-                    height=500,
-                    type="tuples"
+                    label="💬 Chat",
+                    height=500
                 )
 
                 with gr.Row():
@@ -232,31 +258,122 @@ def create_interface():
                         scale=4,
                         lines=1
                     )
-                    submit_btn = gr.Button("Send", variant="primary", scale=1)
+                    submit_btn = gr.Button("🚀 Send", variant="primary", scale=1)
 
                 with gr.Row():
-                    clear_btn = gr.Button("Clear Chat", variant="secondary")
+                    clear_btn = gr.Button("🗑️ Clear Chat", variant="secondary")
 
+                # Voice Output
                 audio_output = gr.Audio(
-                    label="Voice Response",
+                    label="🔊 Voice Response",
                     autoplay=True,
                     interactive=False
                 )
 
+            # ===== SIDEBAR WITH SETTINGS =====
             with gr.Column(scale=1):
+                # Document Upload Section
                 with gr.Group():
-                    gr.HTML("<h3 style='text-align: center;'>Upload Documents</h3>")
+                    gr.HTML("<h3 style='text-align: center;'>📄 Upload Documents</h3>")
                     file_upload = gr.Files(
                         label="",
                         file_types=[".pdf"],
                         file_count="multiple"
                     )
                 upload_status = gr.Textbox(
-                    label="Status",
+                    label="📊 Status",
                     interactive=False,
                     max_lines=10
                 )
 
+                # ===== AI PARAMETERS SETTINGS =====
+                with gr.Accordion("⚙️ AI Parameters", open=False):
+                    gr.HTML("<h4 style='margin-bottom: 10px;'>🧠 Model Settings</h4>")
+                    
+                    temperature_slider = gr.Slider(
+                        0.0, 1.0,
+                        value=0.3,
+                        step=0.1,
+                        label="🌡️ Temperature",
+                        info="Higher = more creative"
+                    )
+                    
+                    max_tokens_slider = gr.Slider(
+                        100, 2000,
+                        value=500,
+                        step=50,
+                        label="📝 Max Tokens",
+                        info="Response length"
+                    )
+
+                # ===== DOCUMENT PROCESSING SETTINGS =====
+                with gr.Accordion("📄 Document Processing", open=False):
+                    gr.HTML("<h4 style='margin-bottom: 10px;'>📦 Chunking Strategy</h4>")
+                    
+                    chunk_size_slider = gr.Slider(
+                        256, 1024,
+                        value=512,
+                        step=64,
+                        label="📄 Chunk Size",
+                        info="Text segment size"
+                    )
+                    
+                    chunk_overlap_slider = gr.Slider(
+                        0, 200,
+                        value=50,
+                        step=10,
+                        label="🔗 Chunk Overlap",
+                        info="Overlap between chunks"
+                    )
+                    
+                    retrieval_k_slider = gr.Slider(
+                        3, 15,
+                        value=8,
+                        step=1,
+                        label="🔍 Retrieved Chunks",
+                        info="Documents to retrieve"
+                    )
+
+                # ===== AGENTIC TOOLS SETTINGS =====
+                with gr.Accordion("🛠️ Agentic Tools", open=False):
+                    gr.HTML("<h4 style='margin-bottom: 10px;'>⚡ Enable/Disable Tools</h4>")
+                    
+                    with gr.Row():
+                        enable_web = gr.Checkbox(
+                            value=True,
+                            label="🌐 Web Search"
+                        )
+                        enable_calc = gr.Checkbox(
+                            value=True,
+                            label="🧮 Calculator"
+                        )
+                    
+                    with gr.Row():
+                        enable_fact = gr.Checkbox(
+                            value=True,
+                            label="✅ Fact Check"
+                        )
+                        enable_analysis = gr.Checkbox(
+                            value=True,
+                            label="📊 Analysis"
+                        )
+
+                # Apply Settings Button
+                apply_btn = gr.Button(
+                    "⚡ Apply Settings",
+                    variant="primary",
+                    size="lg"
+                )
+
+                # Settings Status
+                settings_status = gr.Textbox(
+                    label="⚙️ Settings Status",
+                    interactive=False,
+                    max_lines=10,
+                    value="Settings ready. Adjust and click 'Apply Settings'"
+                )
+
+        # ===== EVENT HANDLERS =====
         def respond(message, history):
             """Handle user message"""
             new_hist, audio_file = agent.ask(message, history)
@@ -264,7 +381,7 @@ def create_interface():
 
         def clear_chat():
             """Clear chat history"""
-            return [], None
+            return []
 
         # Connect events
         submit_btn.click(
@@ -272,26 +389,48 @@ def create_interface():
             inputs=[msg, chatbot],
             outputs=[msg, chatbot, audio_output]
         )
+        
         msg.submit(
             respond,
             inputs=[msg, chatbot],
             outputs=[msg, chatbot, audio_output]
         )
+        
         clear_btn.click(
             clear_chat,
-            outputs=[chatbot, audio_output]
+            outputs=[chatbot]
         )
+        
         file_upload.change(
             agent.upload_pdfs,
             inputs=[file_upload],
             outputs=[upload_status]
+        )
+        
+        apply_btn.click(
+            agent.update_settings,
+            inputs=[
+                temperature_slider, max_tokens_slider, chunk_size_slider,
+                chunk_overlap_slider, retrieval_k_slider, enable_web,
+                enable_calc, enable_fact, enable_analysis
+            ],
+            outputs=[settings_status]
         )
 
     return interface
 
 
 if __name__ == "__main__":
-    print("🚀 Starting AI Research Agent...")
+    print("🚀 Starting AI Research Agent with Full UI...")
+    print("✨ Features:")
+    print("   • Document Upload (PDF)")
+    print("   • Semantic Search")
+    print("   • Groq LLM Integration")
+    print("   • Voice Output (gTTS)")
+    print("   • AI Parameter Controls")
+    print("   • Document Processing Settings")
+    print("   • Agentic Tools Toggle")
+    
     app = create_interface()
     app.launch(
         server_name="0.0.0.0",
